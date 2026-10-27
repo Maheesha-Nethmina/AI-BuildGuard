@@ -7,9 +7,12 @@
   --muted: #8a97b0;
   --accent: #4f8cff;
   --accent-soft: rgba(79, 140, 255, 0.14);
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.13);
   --warning: #f5a524;
   --warning-soft: rgba(245, 165, 36, 0.14);
   --danger: #ff6b6b;
+  --danger-soft: rgba(255, 107, 107, 0.12);
   --radius: 14px;
 
   font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -39,7 +42,7 @@ p {
 }
 
 .app {
-  max-width: 820px;
+  max-width: 860px;
   margin: 0 auto;
   padding: 24px 24px 40px;
   display: flex;
@@ -112,10 +115,22 @@ p {
   border-color: rgba(79, 140, 255, 0.35);
 }
 
+.pill-success {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
 .pill-warning {
   color: var(--warning);
   background: var(--warning-soft);
   border-color: rgba(245, 165, 36, 0.35);
+}
+
+.pill-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(255, 107, 107, 0.35);
 }
 
 /* Cards */
@@ -142,6 +157,11 @@ p {
   color: var(--muted);
 }
 
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
 .path {
   font-family: "Cascadia Code", "Consolas", monospace;
   font-size: 13.5px;
@@ -163,7 +183,7 @@ p {
   border-radius: 10px;
   font-size: 13.5px;
   color: var(--danger);
-  background: rgba(255, 107, 107, 0.1);
+  background: var(--danger-soft);
   border: 1px solid rgba(255, 107, 107, 0.3);
 }
 
@@ -217,7 +237,7 @@ input:focus {
 /* Stats */
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
 }
 
@@ -245,11 +265,10 @@ input:focus {
 }
 
 .stat-small {
-  font-size: 18px;
-  line-height: 1.9;
+  font-size: 22px;
 }
 
-/* Activity log */
+/* Shared text */
 .muted {
   color: var(--muted);
   font-size: 13px;
@@ -261,6 +280,114 @@ input:focus {
   text-align: center;
 }
 
+.dimmed {
+  opacity: 0.5;
+}
+
+.badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.badge-error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* Problems */
+.success-note {
+  padding: 12px 14px;
+  border-radius: 10px;
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  font-weight: 600;
+}
+
+.notice {
+  padding: 12px 14px;
+  border-radius: 10px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid rgba(245, 165, 36, 0.3);
+}
+
+.notice p {
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.problems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.problem {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.problem-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.problem-loc {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.problem-msg {
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.raw {
+  margin-top: 12px;
+}
+
+.raw summary,
+.dev summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.raw pre {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Activity log */
 .log {
   list-style: none;
   margin: 0;
@@ -268,7 +395,7 @@ input:focus {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 320px;
+  max-height: 260px;
   overflow-y: auto;
 }
 
@@ -286,15 +413,6 @@ input:focus {
   margin-bottom: 6px;
 }
 
-.badge {
-  font-size: 12px;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 999px;
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .files {
   list-style: none;
   margin: 0;
@@ -305,14 +423,6 @@ input:focus {
 }
 
 /* Developer tools */
-.dev summary {
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--muted);
-  margin-bottom: 0;
-}
-
 .dev[open] summary {
   margin-bottom: 12px;
 }
