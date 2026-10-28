@@ -20,6 +20,7 @@ type Diagnostic = {
   severity: string;
   code: string;
   message: string;
+  source: string;
 };
 
 type CheckResult = {
@@ -42,8 +43,7 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString();
 }
 
-// Subscribes to a Tauri event. The "cancelled" flag prevents a duplicate
-// listener when React StrictMode mounts, unmounts and re-mounts in development.
+// Subscribes to a Tauri event and cleans up properly to handle React StrictMode
 function useTauriEvent<T>(eventName: string, handler: (payload: T) => void) {
   useEffect(() => {
     let cancelled = false;
