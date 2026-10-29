@@ -44,7 +44,47 @@ type CheckResult = {
   durationMs: number;
 };
 
-type Pill = { className: string; text: string };
+type StatusKind =
+  | "noProject"
+  | "notWatching"
+  | "initializing"
+  | "checking"
+  | "healthy"
+  | "warnings"
+  | "errors"
+  | "unavailable";
+
+// Computed in Rust (status.rs). The UI only displays it.
+type StatusSnapshot = {
+  kind: StatusKind;
+  label: string;
+  errorCount: number;
+  warningCount: number;
+  revision: number;
+  checkedRevision: number | null;
+  projectPath: string | null;
+};
+
+const INITIAL_STATUS: StatusSnapshot = {
+  kind: "noProject",
+  label: "No project",
+  errorCount: 0,
+  warningCount: 0,
+  revision: 0,
+  checkedRevision: null,
+  projectPath: null,
+};
+
+const PILL_CLASS: Record<StatusKind, string> = {
+  noProject: "pill pill-idle",
+  notWatching: "pill pill-warning",
+  initializing: "pill pill-watching",
+  checking: "pill pill-watching",
+  healthy: "pill pill-success",
+  warnings: "pill pill-warning",
+  errors: "pill pill-danger",
+  unavailable: "pill pill-warning",
+};
 
 const MAX_LOG_ENTRIES = 50;
 
@@ -97,23 +137,21 @@ function useTauriEvent<T>(eventName: string, handler: (payload: T) => void) {
 
 function App() {
   const [settings, setSettings] = useState<Settings>({ projectPath: null });
-  const [watching, setWatching] = useState(false);
+  const [status, setStatus] = useState<StatusSnapshot>(INITIAL_STATUS);
   const [changes, setChanges] = useState<ChangeBatch[]>([]);
   const [totalBatches, setTotalBatches] = useState(0);
-  const [latestRevision, setLatestRevision] = useState(0);
   const [result, setResult] = useState<CheckResult | null>(null);
-  const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [greetMsg, setGreetMsg] = useState("");
   const [name, setName] = useState("");
 
   async function refresh() {
-    const [loadedSettings, isWatching] = await Promise.all([
+    const [loadedSettings, snapshot] = await Promise.all([
       invoke<Settings>("get_settings"),
-      invoke<boolean>("get_watcher_status"),
+      invoke<StatusSnapshot>("get_status"),
     ]);
     setSettings(loadedSettings);
-    setWatching(isWatching);
+    setStatus(snapshot);
   }
 
   useEffect(() => {
@@ -125,19 +163,17 @@ function App() {
       .catch((err) => setError(String(err)));
   }, []);
 
-  useTauriEvent<ChangeBatch>("project-changed", (batch) => {
-    setChanges((previous) => [batch, ...previous].slice(0, MAX_LOG_ENTRIES));
-    setTotalBatches((count) => count + 1);
-    setLatestRevision((current) => Math.max(current, batch.revision));
-  });
-
-  useTauriEvent<{ runId: number; revision: number }>("check-started", () => {
-    setChecking(true);
+  useTauriEvent<StatusSnapshot>("status-changed", (snapshot) => {
+    setStatus(snapshot);
   });
 
   useTauriEvent<CheckResult>("check-finished", (finished) => {
     setResult(finished);
-    setChecking(false);
+  });
+
+  useTauriEvent<ChangeBatch>("project-changed", (batch) => {
+    setChanges((previous) => [batch, ...previous].slice(0, MAX_LOG_ENTRIES));
+    setTotalBatches((count) => count + 1);
   });
 
   async function chooseProject() {
@@ -171,46 +207,13 @@ function App() {
 
   const hasProject = settings.projectPath !== null;
 
-  // Only trust a result that belongs to the current project.
+  // Only show details that belong to the current project.
   const currentResult =
-    result && result.projectPath === settings.projectPath ? result : null;
-  // A result older than the latest file change is out of date.
-  const isStale = currentResult !== null && currentResult.revision < latestRevision;
-  const isChecking = checking || isStale;
+    result && result.projectPath === status.projectPath ? result : null;
 
-  const errorCount =
-    currentResult?.diagnostics.filter((d) => d.severity === "error").length ?? 0;
-  const warningCount =
-    currentResult?.diagnostics.filter((d) => d.severity === "warning").length ?? 0;
+  const isChecking = status.kind === "checking";
   const showCounts =
-    currentResult !== null && !isChecking && currentResult.outcome !== "unavailable";
-
-  function getPill(): Pill {
-    if (!hasProject) return { className: "pill pill-idle", text: "No project" };
-    if (!watching) return { className: "pill pill-warning", text: "Not watching" };
-    if (isChecking) return { className: "pill pill-watching", text: "Checking…" };
-
-    switch (currentResult?.outcome) {
-      case "errors":
-        return {
-          className: "pill pill-danger",
-          text: errorCount === 1 ? "1 error" : `${errorCount} errors`,
-        };
-      case "unavailable":
-        return { className: "pill pill-warning", text: "Checker unavailable" };
-      case "warnings":
-        return {
-          className: "pill pill-warning",
-          text: warningCount === 1 ? "1 warning" : `${warningCount} warnings`,
-        };
-      case "passed":
-        return { className: "pill pill-success", text: "No errors" };
-      default:
-        return { className: "pill pill-watching", text: "Watching" };
-    }
-  }
-
-  const pill = getPill();
+    status.kind === "healthy" || status.kind === "warnings" || status.kind === "errors";
 
   return (
     <main className="app">
@@ -222,9 +225,9 @@ function App() {
             <p className="subtitle">Build error monitor</p>
           </div>
         </div>
-        <span className={pill.className}>
+        <span className={PILL_CLASS[status.kind]}>
           <span className="pill-dot" />
-          {pill.text}
+          {status.label}
         </span>
       </header>
 
@@ -251,7 +254,7 @@ function App() {
       <section className="stats">
         <div className="stat">
           <span className="stat-label">Revision</span>
-          <span className="stat-value">{latestRevision > 0 ? latestRevision : "—"}</span>
+          <span className="stat-value">{status.revision > 0 ? status.revision : "—"}</span>
         </div>
         <div className="stat">
           <span className="stat-label">Change batches</span>
@@ -259,11 +262,11 @@ function App() {
         </div>
         <div className="stat">
           <span className="stat-label">Errors</span>
-          <span className="stat-value">{showCounts ? errorCount : "—"}</span>
+          <span className="stat-value">{showCounts ? status.errorCount : "—"}</span>
         </div>
         <div className="stat">
           <span className="stat-label">Warnings</span>
-          <span className="stat-value">{showCounts ? warningCount : "—"}</span>
+          <span className="stat-value">{showCounts ? status.warningCount : "—"}</span>
         </div>
         <div className="stat">
           <span className="stat-label">Last check</span>
@@ -285,13 +288,11 @@ function App() {
           </p>
         )}
 
-        {currentResult?.outcome === "passed" && (
-          <p className={isChecking ? "success-note dimmed" : "success-note"}>
-            No errors or warnings found.
-          </p>
+        {status.kind === "healthy" && (
+          <p className="success-note">No errors or warnings found.</p>
         )}
 
-        {currentResult?.outcome === "unavailable" && (
+        {status.kind === "unavailable" && (
           <div className="notice">
             <strong>A checker could not run.</strong>
             <p>The project cannot be reported as healthy until it can. See the checkers below.</p>
@@ -307,7 +308,9 @@ function App() {
               >
                 <div className="problem-head">
                   <span className="badge badge-source">{checkerLabel(d.source)}</span>
-                  <span className={d.severity === "error" ? "badge badge-error" : "badge badge-warning"}>
+                  <span
+                    className={d.severity === "error" ? "badge badge-error" : "badge badge-warning"}
+                  >
                     {d.code}
                   </span>
                   <span className="problem-loc">
