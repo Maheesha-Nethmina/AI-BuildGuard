@@ -13,37 +13,68 @@ type ChangeBatch = {
   atMs: number;
 };
 
+type Outcome = "passed" | "warnings" | "errors" | "unavailable" | "skipped";
+
 type Diagnostic = {
   file: string;
   line: number;
   column: number;
   severity: string;
+  source: string;
   code: string;
   message: string;
-  source: string;
+};
+
+type CheckerReport = {
+  name: string;
+  outcome: Outcome;
+  message: string | null;
+  rawOutput: string;
+  exitCode: number | null;
+  durationMs: number;
 };
 
 type CheckResult = {
   runId: number;
   revision: number;
   projectPath: string;
-  outcome: "passed" | "errors" | "unavailable";
+  outcome: Outcome;
   diagnostics: Diagnostic[];
-  message: string | null;
-  rawOutput: string;
+  reports: CheckerReport[];
   durationMs: number;
-  exitCode: number | null;
 };
 
 type Pill = { className: string; text: string };
 
 const MAX_LOG_ENTRIES = 50;
 
+const CHECKER_LABELS: Record<string, string> = {
+  typescript: "TypeScript",
+  eslint: "ESLint",
+};
+
+const OUTCOME_TEXT: Record<Outcome, string> = {
+  passed: "Passed",
+  warnings: "Warnings",
+  errors: "Errors",
+  unavailable: "Unavailable",
+  skipped: "Skipped",
+};
+
+function checkerLabel(name: string): string {
+  return CHECKER_LABELS[name] ?? name;
+}
+
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString();
 }
 
-// Subscribes to a Tauri event and cleans up properly to handle React StrictMode
+function formatSeconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// Subscribes to a Tauri event. The "cancelled" flag prevents a duplicate
+// listener when React StrictMode mounts, unmounts and re-mounts in development.
 function useTauriEvent<T>(eventName: string, handler: (payload: T) => void) {
   useEffect(() => {
     let cancelled = false;
@@ -146,25 +177,37 @@ function App() {
   // A result older than the latest file change is out of date.
   const isStale = currentResult !== null && currentResult.revision < latestRevision;
   const isChecking = checking || isStale;
-  const errorCount = currentResult?.diagnostics.length ?? 0;
+
+  const errorCount =
+    currentResult?.diagnostics.filter((d) => d.severity === "error").length ?? 0;
+  const warningCount =
+    currentResult?.diagnostics.filter((d) => d.severity === "warning").length ?? 0;
+  const showCounts =
+    currentResult !== null && !isChecking && currentResult.outcome !== "unavailable";
 
   function getPill(): Pill {
     if (!hasProject) return { className: "pill pill-idle", text: "No project" };
     if (!watching) return { className: "pill pill-warning", text: "Not watching" };
     if (isChecking) return { className: "pill pill-watching", text: "Checking…" };
-    if (currentResult?.outcome === "errors") {
-      return {
-        className: "pill pill-danger",
-        text: errorCount === 1 ? "1 error" : `${errorCount} errors`,
-      };
+
+    switch (currentResult?.outcome) {
+      case "errors":
+        return {
+          className: "pill pill-danger",
+          text: errorCount === 1 ? "1 error" : `${errorCount} errors`,
+        };
+      case "unavailable":
+        return { className: "pill pill-warning", text: "Checker unavailable" };
+      case "warnings":
+        return {
+          className: "pill pill-warning",
+          text: warningCount === 1 ? "1 warning" : `${warningCount} warnings`,
+        };
+      case "passed":
+        return { className: "pill pill-success", text: "No errors" };
+      default:
+        return { className: "pill pill-watching", text: "Watching" };
     }
-    if (currentResult?.outcome === "unavailable") {
-      return { className: "pill pill-warning", text: "Checker unavailable" };
-    }
-    if (currentResult?.outcome === "passed") {
-      return { className: "pill pill-success", text: "No errors" };
-    }
-    return { className: "pill pill-watching", text: "Watching" };
   }
 
   const pill = getPill();
@@ -216,16 +259,16 @@ function App() {
         </div>
         <div className="stat">
           <span className="stat-label">Errors</span>
-          <span className="stat-value">
-            {currentResult && currentResult.outcome !== "unavailable" && !isChecking
-              ? errorCount
-              : "—"}
-          </span>
+          <span className="stat-value">{showCounts ? errorCount : "—"}</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Warnings</span>
+          <span className="stat-value">{showCounts ? warningCount : "—"}</span>
         </div>
         <div className="stat">
           <span className="stat-label">Last check</span>
           <span className="stat-value stat-small">
-            {currentResult ? `${(currentResult.durationMs / 1000).toFixed(1)}s` : "—"}
+            {currentResult ? formatSeconds(currentResult.durationMs) : "—"}
           </span>
         </div>
       </section>
@@ -244,23 +287,29 @@ function App() {
 
         {currentResult?.outcome === "passed" && (
           <p className={isChecking ? "success-note dimmed" : "success-note"}>
-            TypeScript found no errors.
+            No errors or warnings found.
           </p>
         )}
 
         {currentResult?.outcome === "unavailable" && (
           <div className="notice">
-            <strong>The checker could not run.</strong>
-            <p>{currentResult.message}</p>
+            <strong>A checker could not run.</strong>
+            <p>The project cannot be reported as healthy until it can. See the checkers below.</p>
           </div>
         )}
 
-        {currentResult?.outcome === "errors" && (
+        {currentResult && currentResult.diagnostics.length > 0 && (
           <ul className={isChecking ? "problems dimmed" : "problems"}>
             {currentResult.diagnostics.map((d, index) => (
-              <li key={`${d.file}:${d.line}:${d.column}:${d.code}:${index}`} className="problem">
+              <li
+                key={`${d.source}:${d.file}:${d.line}:${d.column}:${d.code}:${index}`}
+                className={d.severity === "error" ? "problem" : "problem problem-warning"}
+              >
                 <div className="problem-head">
-                  <span className="badge badge-error">{d.code}</span>
+                  <span className="badge badge-source">{checkerLabel(d.source)}</span>
+                  <span className={d.severity === "error" ? "badge badge-error" : "badge badge-warning"}>
+                    {d.code}
+                  </span>
                   <span className="problem-loc">
                     {d.file}
                     {d.line > 0 ? `:${d.line}:${d.column}` : ""}
@@ -271,14 +320,34 @@ function App() {
             ))}
           </ul>
         )}
-
-        {currentResult && (
-          <details className="raw">
-            <summary>Raw output (revision {currentResult.revision})</summary>
-            <pre>{currentResult.rawOutput || "(no output)"}</pre>
-          </details>
-        )}
       </section>
+
+      {currentResult && (
+        <section className="card">
+          <div className="card-head">
+            <h2>Checkers</h2>
+            <span className="muted">Revision {currentResult.revision}</span>
+          </div>
+          <ul className="reports">
+            {currentResult.reports.map((report) => (
+              <li key={report.name} className="report">
+                <div className="report-head">
+                  <span className="report-name">{checkerLabel(report.name)}</span>
+                  <span className={`outcome outcome-${report.outcome}`}>
+                    {OUTCOME_TEXT[report.outcome]}
+                  </span>
+                  <span className="muted">{formatSeconds(report.durationMs)}</span>
+                </div>
+                {report.message && <p className="report-message">{report.message}</p>}
+                <details className="raw">
+                  <summary>Raw output</summary>
+                  <pre>{report.rawOutput || "(no output)"}</pre>
+                </details>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="card">
         <div className="card-head">
