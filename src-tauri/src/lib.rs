@@ -8,7 +8,7 @@ use std::sync::{atomic::Ordering, mpsc, Mutex};
 
 use tauri::{AppHandle, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_notification::NotificationExt;
+// use tauri_plugin_notification::NotificationExt;
 
 use checks::{CheckRequest, CheckResult, CheckerState};
 use settings::{load_settings, save_settings, Settings};
@@ -103,16 +103,16 @@ pub fn run() {
             tray::build_tray(app)?;
 
             // TEMPORARY: startup test toast. Remove this block after testing.
-            match app
-                .notification()
-                .builder()
-                .title("BuildGuard test")
-                .body("If you see this, Windows toasts work")
-                .show()
-            {
-                Ok(_) => eprintln!("startup test toast: show() Ok"),
-                Err(err) => eprintln!("startup test toast failed: {err}"),
-            }
+            // match app
+            //     .notification()
+            //     .builder()
+            //     .title("BuildGuard test")
+            //     .body("If you see this, Windows toasts work")
+            //     .show()
+            // {
+            //     Ok(_) => eprintln!("startup test toast: show() Ok"),
+            //     Err(err) => eprintln!("startup test toast failed: {err}"),
+            // }
 
             // The checker worker must exist before any check is requested.
             checks::spawn_checker(app.handle().clone(), check_rx);
