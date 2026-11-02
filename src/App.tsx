@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { onAction } from "@tauri-apps/plugin-notification";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
 type Settings = {
@@ -161,6 +163,31 @@ function App() {
         if (last) setResult(last);
       })
       .catch((err) => setError(String(err)));
+  }, []);
+
+  // Listen for notification clicks to open/focus the app
+  useEffect(() => {
+    type NotificationListener = Awaited<ReturnType<typeof onAction>>;
+    let unlistenFn: NotificationListener | undefined;
+
+    const setupListener = async () => {
+      unlistenFn = await onAction(async (_event) => {
+        const appWindow = getCurrentWindow();
+        
+        // These commands are asynchronous in Tauri v2 and must be awaited
+        await appWindow.unminimize();
+        await appWindow.show();
+        await appWindow.setFocus();
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlistenFn) {
+        unlistenFn.unregister();
+      }
+    };
   }, []);
 
   useTauriEvent<StatusSnapshot>("status-changed", (snapshot) => {

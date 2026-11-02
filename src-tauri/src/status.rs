@@ -56,9 +56,9 @@ pub(crate) struct StatusManager {
     latest_revision: u64,
     running_run: Option<u64>,
     last_result: Option<CheckResult>,
-    /// Last status that was not transient (Healthy, Warnings, Errors, Unavailable).
-    /// Used to decide whether a new Errors status deserves a notification.
     settled: Option<StatusKind>,
+    /// Tracks the last revision we sent a notification for, so we notify on EVERY save.
+    last_notified_revision: Option<u64>, 
 }
 
 impl StatusManager {
@@ -68,6 +68,7 @@ impl StatusManager {
             self.last_result = None;
             self.settled = None;
             self.running_run = None;
+            self.last_notified_revision = None;
         }
         self.project_path = path;
         self.watching = watching;
@@ -190,17 +191,21 @@ impl StatusManager {
     }
 
     /// Returns true when this snapshot should produce a notification:
-    /// errors that appear after a settled, non-error status. The first settled
-    /// status after launch or a project switch only sets the baseline.
+    /// Triggers on EVERY finished check (when revision updates) regardless of whether it's broken or healthy.
     pub(crate) fn take_notification(&mut self, snapshot: &StatusSnapshot) -> bool {
         match snapshot.kind {
             StatusKind::Healthy
             | StatusKind::Warnings
             | StatusKind::Errors
             | StatusKind::Unavailable => {
-                let previous = self.settled.replace(snapshot.kind);
-                snapshot.kind == StatusKind::Errors
-                    && matches!(previous, Some(kind) if kind != StatusKind::Errors)
+                self.settled.replace(snapshot.kind);
+                
+                // If we have a checked_revision and it's different from the last one we notified about:
+                if snapshot.checked_revision.is_some() && self.last_notified_revision != snapshot.checked_revision {
+                    self.last_notified_revision = snapshot.checked_revision;
+                    return true;
+                }
+                false
             }
             _ => false,
         }
@@ -249,13 +254,30 @@ fn send_notification(app: &AppHandle, snapshot: &StatusSnapshot) {
         .and_then(|name| name.to_str())
         .unwrap_or("your project");
 
+    // Dynamic red, yellow, and green tags based on the status of every save
+    let (title, body) = match snapshot.kind {
+        StatusKind::Errors => (
+            "🔴 BuildGuard: Build Errors",
+            format!("{} in {}", snapshot.label, project_name),
+        ),
+        StatusKind::Warnings => (
+            "🟡 BuildGuard: Build Warnings",
+            format!("{} in {}", snapshot.label, project_name),
+        ),
+        _ => (
+            "🟢 BuildGuard: Build Clean",
+            format!("No errors in {}", project_name),
+        ),
+    };
+
     eprintln!("send_notification called: {} in {}", snapshot.label, project_name);
 
     match app
         .notification()
         .builder()
-        .title("BuildGuard found build errors")
-        .body(format!("{} in {}", snapshot.label, project_name))
+        .title(title)
+        .body(body)
+        .action_type_id("focus-app-action")
         .show()
     {
         Ok(_) => eprintln!("notification show() returned Ok"),
@@ -466,43 +488,24 @@ mod tests {
     }
 
     #[test]
-    fn first_result_after_launch_only_sets_the_baseline() {
-        let mut manager = manager();
-        manager.on_change(1);
-        manager.on_check_finished(result(
-            PROJECT,
-            1,
-            1,
-            Outcome::Errors,
-            vec![diagnostic("error")],
-        ));
-        assert!(!settle(&mut manager));
-    }
-
-    #[test]
-    fn notifies_when_errors_appear_but_not_for_repeats() {
+    fn notifies_on_every_completed_check_regardless_of_state() {
         let mut manager = manager();
 
-        // Clean baseline.
+        // 1st Save: Clean baseline -> Notifies (Green)
         manager.on_change(1);
         manager.on_check_started(1, PROJECT);
-        assert!(!settle(&mut manager));
+        assert!(!settle(&mut manager)); // Still checking, no notification
         manager.on_check_finished(result(PROJECT, 1, 1, Outcome::Passed, vec![]));
-        assert!(!settle(&mut manager));
+        assert!(settle(&mut manager)); // Finished -> Notify
 
-        // Errors appear: one notification.
+        // 2nd Save: Still Clean -> Notifies (Green)
         manager.on_change(2);
         manager.on_check_started(2, PROJECT);
-        manager.on_check_finished(result(
-            PROJECT,
-            2,
-            2,
-            Outcome::Errors,
-            vec![diagnostic("error")],
-        ));
+        assert!(!settle(&mut manager));
+        manager.on_check_finished(result(PROJECT, 2, 2, Outcome::Passed, vec![]));
         assert!(settle(&mut manager));
 
-        // Errors, then Checking, then Errors again: no repeat.
+        // 3rd Save: Errors appear -> Notifies (Red)
         manager.on_change(3);
         manager.on_check_started(3, PROJECT);
         assert!(!settle(&mut manager));
@@ -511,21 +514,18 @@ mod tests {
             3,
             3,
             Outcome::Errors,
-            vec![diagnostic("error"), diagnostic("error")],
+            vec![diagnostic("error")],
         ));
-        assert!(!settle(&mut manager));
+        assert!(settle(&mut manager));
 
-        // Fixed, then broken again: notifies again.
+        // 4th Save: Same Errors -> Notifies (Red)
         manager.on_change(4);
         manager.on_check_started(4, PROJECT);
-        manager.on_check_finished(result(PROJECT, 4, 4, Outcome::Passed, vec![]));
         assert!(!settle(&mut manager));
-        manager.on_change(5);
-        manager.on_check_started(5, PROJECT);
         manager.on_check_finished(result(
             PROJECT,
-            5,
-            5,
+            4,
+            4,
             Outcome::Errors,
             vec![diagnostic("error")],
         ));
