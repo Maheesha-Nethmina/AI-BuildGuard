@@ -46,6 +46,12 @@ type CheckResult = {
   durationMs: number;
 };
 
+type ProductionBuildResult = {
+  success: boolean;
+  rawOutput: string;
+  durationMs: number;
+};
+
 type StatusKind =
   | "noProject"
   | "notWatching"
@@ -56,7 +62,6 @@ type StatusKind =
   | "errors"
   | "unavailable";
 
-// Computed in Rust (status.rs). The UI only displays it.
 type StatusSnapshot = {
   kind: StatusKind;
   label: string;
@@ -115,7 +120,6 @@ function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-// ---- UI only: tooltip texts (plain-language help for every card and item) ----
 const STATUS_TIPS: Record<StatusKind, string> = {
   noProject: "No project is selected yet. Choose a project folder to start monitoring.",
   notWatching:
@@ -143,7 +147,6 @@ const CHECKER_TIPS: Record<string, string> = {
     "ESLint check. Finds code-quality problems such as unused variables and risky patterns.",
 };
 
-// ---- UI only: tiny inline icon set (no extra dependencies) ----
 const ICON_PATHS: Record<string, string> = {
   grid: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
   list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
@@ -180,7 +183,6 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
   );
 }
 
-// Small "i" button placed next to a card title. Hover or focus shows the help text.
 function Hint({ text }: { text: string }) {
   return (
     <button type="button" className="hint" data-tip={text} aria-label={text}>
@@ -189,9 +191,6 @@ function Hint({ text }: { text: string }) {
   );
 }
 
-// One shared tooltip for the whole app. Any element with a data-tip attribute
-// shows its text on hover or keyboard focus. It is positioned with "fixed" so it
-// is never clipped by scrolling lists or cards.
 type TipState = { text: string; x: number; y: number; below: boolean };
 
 function TooltipLayer() {
@@ -257,8 +256,6 @@ function TooltipLayer() {
   );
 }
 
-// Subscribes to a Tauri event. The "cancelled" flag prevents a duplicate
-// listener when React StrictMode mounts, unmounts and re-mounts in development.
 function useTauriEvent<T>(eventName: string, handler: (payload: T) => void) {
   useEffect(() => {
     let cancelled = false;
@@ -285,9 +282,11 @@ function App() {
   const [changes, setChanges] = useState<ChangeBatch[]>([]);
   const [totalBatches, setTotalBatches] = useState(0);
   const [result, setResult] = useState<CheckResult | null>(null);
+  
+  const [buildResult, setBuildResult] = useState<ProductionBuildResult | null>(null);
+  const [isBuilding, setIsBuilding] = useState(false);
+
   const [error, setError] = useState("");
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
 
   async function refresh() {
     const [loadedSettings, snapshot] = await Promise.all([
@@ -307,7 +306,6 @@ function App() {
       .catch((err) => setError(String(err)));
   }, []);
 
-  // Listen for notification clicks to open/focus the app
   useEffect(() => {
     type NotificationListener = Awaited<ReturnType<typeof onAction>>;
     let unlistenFn: NotificationListener | undefined;
@@ -315,8 +313,6 @@ function App() {
     const setupListener = async () => {
       unlistenFn = await onAction(async (_event) => {
         const appWindow = getCurrentWindow();
-
-        // These commands are asynchronous in Tauri v2 and must be awaited
         await appWindow.unminimize();
         await appWindow.show();
         await appWindow.setFocus();
@@ -353,7 +349,23 @@ function App() {
       if (updated.projectPath !== previousPath) {
         setChanges([]);
         setTotalBatches(0);
+        setBuildResult(null);
       }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      await refresh();
+    }
+  }
+
+  async function clearProject() {
+    setError("");
+    try {
+      await invoke<Settings>("clear_project");
+      setChanges([]);
+      setTotalBatches(0);
+      setBuildResult(null);
+      setResult(null);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -370,13 +382,36 @@ function App() {
     }
   }
 
-  async function greet() {
-    setGreetMsg(await invoke<string>("greet", { name }));
+  async function runProductionBuild() {
+    if (!settings.projectPath) return;
+    setIsBuilding(true);
+    setError("");
+    try {
+      const res = await invoke<ProductionBuildResult>("run_production_build_command", { 
+        projectPath: settings.projectPath 
+      });
+      setBuildResult(res);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setIsBuilding(false);
+    }
+  }
+
+  async function handleOpenInEditor(file: string, line: number, column: number) {
+    if (!settings.projectPath) return;
+    const fullPath = `${settings.projectPath}/${file}`;
+    try {
+      await invoke("open_in_vscode", { path: fullPath, line, column });
+    } catch (err) {
+      const fallbackLoc = `${fullPath}:${line}:${column}`;
+      navigator.clipboard.writeText(fallbackLoc);
+      setError(`Could not open VS Code directly. Path copied to clipboard:\n${fallbackLoc}`);
+    }
   }
 
   const hasProject = settings.projectPath !== null;
 
-  // Only show details that belong to the current project.
   const currentResult =
     result && result.projectPath === status.projectPath ? result : null;
 
@@ -384,14 +419,12 @@ function App() {
   const showCounts =
     status.kind === "healthy" || status.kind === "warnings" || status.kind === "errors";
 
-  // Display-only helpers
   const problemCount = currentResult ? currentResult.diagnostics.length : 0;
 
   return (
     <div className="shell">
       <TooltipLayer />
 
-      {/* ---------- Sidebar ---------- */}
       <aside className="sidebar">
         <div
           className="brand"
@@ -425,6 +458,14 @@ function App() {
             {problemCount > 0 && <span className="nav-count">{problemCount}</span>}
           </a>
           <a
+            href="#production-build"
+            className="nav-link"
+            data-tip="Go to independent production build results."
+          >
+            <Icon name="play" />
+            <span>Production Build</span>
+          </a>
+          <a
             href="#checkers"
             className="nav-link"
             data-tip="Go to the tools (TypeScript, ESLint) that scan your project, with their raw output."
@@ -455,7 +496,6 @@ function App() {
         </div>
       </aside>
 
-      {/* ---------- Main ---------- */}
       <main className="main">
         <header className="page-head" id="overview">
           <div>
@@ -464,15 +504,25 @@ function App() {
           </div>
           <div className="actions">
             {hasProject && (
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={runCheck}
-                data-tip="Run TypeScript and ESLint on the project right now, without waiting for a file change."
-              >
-                <Icon name="play" size={14} />
-                Run check
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={runCheck}
+                  data-tip="Run TypeScript and ESLint on the project right now, without waiting for a file change."
+                >
+                  <Icon name="play" size={14} />
+                  Run check
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={clearProject}
+                  data-tip="Close the current project and return to the empty state."
+                >
+                  Remove project
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -491,7 +541,7 @@ function App() {
         </header>
 
         {error && (
-          <p className="error" data-tip="Something went wrong. This is the error message returned by the app.">
+          <p className="error" data-tip="System error notification.">
             {error}
           </p>
         )}
@@ -580,7 +630,7 @@ function App() {
           <div className="card-head">
             <div className="title-wrap">
               <h3>Problems</h3>
-              <Hint text="Every error and warning found in your code. Each row shows the tool that found it, the error code, and the file, line and column to fix." />
+              <Hint text="Every error and warning found in your code. Click a row to open the file in VS Code." />
             </div>
             {isChecking ? (
               <span className="muted updating" data-tip="A new check is running. The list below will refresh when it finishes.">
@@ -626,6 +676,9 @@ function App() {
                 <li
                   key={`${d.source}:${d.file}:${d.line}:${d.column}:${d.code}:${index}`}
                   className={d.severity === "error" ? "problem" : "problem problem-warning"}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => handleOpenInEditor(d.file, d.line, d.column)}
+                  title="Click to open this location in VS Code (or copy path to clipboard)"
                 >
                   <div className="problem-head">
                     <span
@@ -650,7 +703,7 @@ function App() {
                       className="problem-loc"
                       data-tip={
                         d.line > 0
-                          ? `File ${d.file}, line ${d.line}, column ${d.column}. Open it in your editor to fix.`
+                          ? `File ${d.file}, line ${d.line}, column ${d.column}. Click to open in editor.`
                           : `File ${d.file}. No specific line was reported.`
                       }
                     >
@@ -662,6 +715,43 @@ function App() {
                 </li>
               ))}
             </ul>
+          )}
+        </section>
+
+        <section className="card" id="production-build">
+          <div className="card-head">
+            <div className="title-wrap">
+              <h3>Production Build</h3>
+              <Hint text="Run a full build (npm run build) manually. Passing fast checks does not mean the full production build will pass." />
+            </div>
+            {hasProject && (
+              <button
+                type="button"
+                className="btn"
+                onClick={runProductionBuild}
+                disabled={isBuilding}
+              >
+                {isBuilding ? "Building..." : "Run Production Build"}
+              </button>
+            )}
+          </div>
+          {!buildResult && !isBuilding && (
+             <p className="empty">No production build has been run yet.</p>
+          )}
+          {buildResult && !isBuilding && (
+            <div className="report">
+              <div className="report-head">
+                 <span className="report-name">NPM Build Result</span>
+                 <span className={`outcome ${buildResult.success ? "outcome-passed" : "outcome-errors"}`}>
+                   {buildResult.success ? "Passed" : "Failed"}
+                 </span>
+                 <span className="muted report-time">{formatSeconds(buildResult.durationMs)}</span>
+              </div>
+              <details className="raw">
+                  <summary>View Raw Build Output</summary>
+                  <pre>{buildResult.rawOutput}</pre>
+              </details>
+            </div>
           )}
         </section>
 
@@ -767,34 +857,6 @@ function App() {
             </ul>
           )}
         </section>
-
-        <details className="card dev">
-          <summary data-tip="Extra tools for developers. You can ignore this section.">
-            Developer tools
-          </summary>
-          <form
-            className="row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              greet();
-            }}
-          >
-            <input
-              id="greet-input"
-              onChange={(e) => setName(e.currentTarget.value)}
-              placeholder="Enter a name..."
-              data-tip="Type any name to test that the app can talk to its Rust backend."
-            />
-            <button
-              type="submit"
-              className="btn"
-              data-tip="Sends the name to the backend and shows its reply."
-            >
-              Greet
-            </button>
-          </form>
-          {greetMsg && <p className="muted">{greetMsg}</p>}
-        </details>
       </main>
     </div>
   );

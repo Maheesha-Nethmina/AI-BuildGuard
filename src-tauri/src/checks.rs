@@ -66,7 +66,6 @@ pub(crate) struct Diagnostic {
     pub(crate) message: String,
 }
 
-/// What one checker (TypeScript or ESLint) reported for one run.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CheckerReport {
@@ -102,13 +101,11 @@ pub(crate) struct CheckRequest {
     revision: u64,
 }
 
-/// The output of one checker: its report plus the problems it found.
 struct CheckerRun {
     report: CheckerReport,
     diagnostics: Vec<Diagnostic>,
 }
 
-/// Sender used by the watcher and the UI to ask the worker for a check.
 pub(crate) struct CheckerState(pub(crate) Mutex<mpsc::Sender<CheckRequest>>);
 
 pub(crate) fn request_check(app: &AppHandle, project_path: String, revision: u64) {
@@ -140,8 +137,6 @@ fn read_pipe<R: Read + Send + 'static>(mut pipe: R) -> thread::JoinHandle<String
     })
 }
 
-/// Runs `node <script> <args>` inside `cwd`. No shell is involved: the program,
-/// the arguments and the working directory are passed separately.
 fn run_node_script(script: &Path, args: &[&str], cwd: &Path) -> Result<ProcessOutput, String> {
     let mut command = Command::new("node");
     command
@@ -152,7 +147,6 @@ fn run_node_script(script: &Path, args: &[&str], cwd: &Path) -> Result<ProcessOu
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // Do not flash a console window on Windows.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -163,7 +157,6 @@ fn run_node_script(script: &Path, args: &[&str], cwd: &Path) -> Result<ProcessOu
         format!("Could not start Node.js. Is it installed and on PATH? ({err})")
     })?;
 
-    // Read both pipes on their own threads so a full pipe can never block the tool.
     let stdout_reader = child.stdout.take().map(read_pipe);
     let stderr_reader = child.stderr.take().map(read_pipe);
 
@@ -234,7 +227,6 @@ fn make_report(
     }
 }
 
-/// A run with no problems and no raw output, only an outcome and a message.
 fn simple_run(name: &str, started: Instant, outcome: Outcome, message: String) -> CheckerRun {
     CheckerRun {
         report: make_report(name, started, outcome, Some(message), String::new(), None),
@@ -255,10 +247,7 @@ fn crashed_run(name: &str) -> CheckerRun {
 // TypeScript checker
 // ---------------------------------------------------------------------------
 
-/// Parses one tsc line such as:
-/// `src/App.tsx(12,5): error TS2322: Type 'string' is not assignable to type 'number'.`
 fn parse_tsc_line(line: &str) -> Option<Diagnostic> {
-    // Errors without a file: "error TS5083: Cannot read file ..."
     if let Some(rest) = line.strip_prefix("error TS") {
         let (code, message) = rest.split_once(':')?;
         return Some(Diagnostic {
@@ -274,13 +263,13 @@ fn parse_tsc_line(line: &str) -> Option<Diagnostic> {
 
     let marker = line.find("): error TS")?;
     let location = &line[..marker];
-    let rest = &line[marker + "): ".len()..]; // "error TS2322: message"
+    let rest = &line[marker + "): ".len()..];
 
     let open = location.rfind('(')?;
     let file = &location[..open];
     let (line_text, column_text) = location[open + 1..].split_once(',')?;
 
-    let (head, message) = rest.split_once(": ")?; // head = "error TS2322"
+    let (head, message) = rest.split_once(": ")?;
     let code = head.strip_prefix("error ")?;
 
     Some(Diagnostic {
@@ -302,7 +291,6 @@ fn parse_tsc_output(output: &str) -> Vec<Diagnostic> {
             continue;
         }
 
-        // Indented lines continue the previous message.
         if line.starts_with(char::is_whitespace) {
             if let Some(last) = diagnostics.last_mut() {
                 last.message.push('\n');
@@ -346,7 +334,6 @@ fn run_typescript_check(root: &Path) -> CheckerRun {
         );
     }
 
-    // `tsc -b` is what the Vite template's own build runs, so results match the real build.
     let output = match run_node_script(&tsc_script, &["-b", "--pretty", "false"], root) {
         Ok(output) => output,
         Err(message) => {
@@ -469,7 +456,6 @@ fn run_eslint_check(root: &Path) -> CheckerRun {
         .join("bin")
         .join("eslint.js");
 
-    // Not using ESLint is fine: skipping never makes the project look unhealthy.
     if !script.is_file() {
         return simple_run(
             "eslint",
@@ -488,7 +474,6 @@ fn run_eslint_check(root: &Path) -> CheckerRun {
         );
     }
 
-    // Read-only: never --fix, never --cache (that would write files into the project).
     let output = match run_node_script(&script, &["--format", "json", "."], root) {
         Ok(output) => output,
         Err(message) => {
@@ -515,7 +500,6 @@ fn run_eslint_check(root: &Path) -> CheckerRun {
         };
     }
 
-    // ESLint exits 0 (clean) or 1 (lint errors found). Anything else means it failed to run.
     if !matches!(output.exit_code, Some(0) | Some(1)) {
         let code_text = output
             .exit_code
@@ -597,7 +581,6 @@ fn overall_outcome(reports: &[CheckerReport], diagnostics: &[Diagnostic]) -> Out
     if diagnostics.iter().any(|d| d.severity == "error") {
         return Outcome::Errors;
     }
-    // A checker that should have run but could not means we cannot call the project healthy.
     if reports
         .iter()
         .any(|r| matches!(r.outcome, Outcome::Unavailable))
@@ -614,7 +597,6 @@ fn run_checks(request: &CheckRequest, run_id: u64) -> CheckResult {
     let started = Instant::now();
     let root = PathBuf::from(&request.project_path);
 
-    // Both checkers run at the same time, so the total time is the slower one.
     let (typescript, eslint) = thread::scope(|scope| {
         let typescript_handle = scope.spawn(|| run_typescript_check(&root));
         let eslint_handle = scope.spawn(|| run_eslint_check(&root));
@@ -631,7 +613,6 @@ fn run_checks(request: &CheckRequest, run_id: u64) -> CheckResult {
     let mut diagnostics = typescript.diagnostics;
     diagnostics.extend(eslint.diagnostics);
 
-    // Errors first, then warnings; within each, by file and position.
     diagnostics.sort_by(|a, b| {
         let rank = |d: &Diagnostic| -> u8 {
             if d.severity == "error" {
@@ -661,9 +642,6 @@ fn run_checks(request: &CheckRequest, run_id: u64) -> CheckResult {
     }
 }
 
-/// One worker runs checks one at a time. Requests that pile up while a check is
-/// running are merged: only the newest one is run next. The status manager is
-/// told when a run starts and finishes.
 pub(crate) fn spawn_checker(app: AppHandle, rx: mpsc::Receiver<CheckRequest>) {
     thread::spawn(move || {
         while let Ok(mut request) = rx.recv() {
@@ -688,4 +666,42 @@ pub(crate) fn spawn_checker(app: AppHandle, rx: mpsc::Receiver<CheckRequest>) {
             status::on_check_finished(&app, result);
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Production Build Execution
+// ---------------------------------------------------------------------------
+
+pub(crate) fn run_production_build(project_path: &str) -> Result<crate::types::ProductionBuildResult, String> {
+    let started = Instant::now();
+    let root = PathBuf::from(project_path);
+    
+    if !root.join("package.json").is_file() {
+        return Err("No package.json found in the project root.".to_string());
+    }
+
+    let mut command = Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" });
+    command
+        .arg("run")
+        .arg("build")
+        .current_dir(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+
+    let output = command.output().map_err(|e| format!("Failed to execute build script: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    Ok(crate::types::ProductionBuildResult {
+        success: output.status.success(),
+        raw_output: truncate_output(combined),
+        duration_ms: started.elapsed().as_millis() as u64,
+    })
 }

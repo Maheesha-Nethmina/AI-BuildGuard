@@ -2,6 +2,7 @@ mod checks;
 mod settings;
 mod status;
 mod tray;
+mod types;
 mod watcher;
 
 use std::sync::{atomic::Ordering, mpsc, Mutex};
@@ -19,7 +20,6 @@ use watcher::{start_watcher, WatcherState, REVISION};
 // Commands (the doorway between the UI and Rust)
 // ---------------------------------------------------------------------------
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -62,7 +62,6 @@ async fn select_project(app: AppHandle) -> Result<Settings, String> {
 
     let picked = app.dialog().file().blocking_pick_folder();
     let Some(folder) = picked else {
-        // User cancelled the dialog: keep whatever was saved before.
         return Ok(current);
     };
 
@@ -84,6 +83,56 @@ async fn select_project(app: AppHandle) -> Result<Settings, String> {
     Ok(settings)
 }
 
+#[tauri::command]
+fn clear_project(
+    app: AppHandle,
+    watcher_state: State<WatcherState>,
+    status_state: State<StatusState>,
+) -> Result<Settings, String> {
+    // 1. Overwrite settings with no project
+    let settings = Settings {
+        project_path: None,
+    };
+    save_settings(&app, &settings)?;
+
+    // 2. Stop the background file watcher
+    if let Ok(mut active) = watcher_state.0.lock() {
+        *active = None;
+    }
+
+    // 3. Reset the internal status state back to the default (NoProject)
+    if let Ok(mut snap) = status_state.0.lock() {
+        if let Ok(default_snap) = StatusState::default().0.into_inner() {
+            *snap = default_snap;
+        }
+    }
+
+    Ok(settings)
+}
+
+#[tauri::command]
+fn open_in_vscode(path: String, line: u32, column: u32) -> Result<(), String> {
+    use std::process::Command;
+    let arg = format!("{}:{}:{}", path, line, column);
+    
+    let mut cmd = Command::new(if cfg!(windows) { "code.cmd" } else { "code" });
+    cmd.arg("--goto").arg(&arg);
+    
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    
+    cmd.spawn().map_err(|e| format!("Could not launch VS Code: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn run_production_build_command(project_path: String) -> Result<crate::types::ProductionBuildResult, String> {
+    checks::run_production_build(&project_path)
+}
+
 // ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
@@ -102,8 +151,6 @@ pub fn run() {
         .setup(move |app| {
             tray::build_tray(app)?;
 
-            // UNCOMMENTED: startup test toast. 
-            // This forces a notification exactly when the app launches.
             match app
                 .notification()
                 .builder()
@@ -115,10 +162,8 @@ pub fn run() {
                 Err(err) => eprintln!("startup test toast failed: {err}"),
             }
 
-            // The checker worker must exist before any check is requested.
             checks::spawn_checker(app.handle().clone(), check_rx);
 
-            // Resume watching the saved project on launch.
             if let Some(path) = load_settings(app.handle()).project_path {
                 if let Err(err) = start_watcher(app.handle(), &path) {
                     eprintln!("Could not start file watcher: {err}");
@@ -128,7 +173,6 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window hides it; the app keeps running in the tray.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
@@ -141,7 +185,10 @@ pub fn run() {
             get_status,
             get_last_check,
             run_check,
-            select_project
+            select_project,
+            clear_project,
+            open_in_vscode,
+            run_production_build_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
