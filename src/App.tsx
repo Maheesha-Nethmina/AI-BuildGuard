@@ -115,6 +115,148 @@ function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+// ---- UI only: tooltip texts (plain-language help for every card and item) ----
+const STATUS_TIPS: Record<StatusKind, string> = {
+  noProject: "No project is selected yet. Choose a project folder to start monitoring.",
+  notWatching:
+    "A project is selected, but file watching is not active, so changes will not be detected automatically.",
+  initializing: "BuildGuard is starting up and running its first check.",
+  checking: "A check is running right now. Results update when it finishes.",
+  healthy: "Both checkers finished and found no errors or warnings.",
+  warnings: "No build-breaking errors, but some warnings were found.",
+  errors: "The project has errors that need to be fixed.",
+  unavailable: "A checker could not run, so the project cannot be confirmed healthy.",
+};
+
+const OUTCOME_TIPS: Record<Outcome, string> = {
+  passed: "This checker ran and found nothing wrong.",
+  warnings: "This checker found warnings. They do not break the build but are worth reviewing.",
+  errors: "This checker found errors that need to be fixed.",
+  unavailable: "This checker could not run (for example, it is not installed in the project).",
+  skipped: "This checker was skipped for this run.",
+};
+
+const CHECKER_TIPS: Record<string, string> = {
+  typescript:
+    "TypeScript compiler check. Finds type mistakes, missing names and syntax errors in your code.",
+  eslint:
+    "ESLint check. Finds code-quality problems such as unused variables and risky patterns.",
+};
+
+// ---- UI only: tiny inline icon set (no extra dependencies) ----
+const ICON_PATHS: Record<string, string> = {
+  grid: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
+  list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  checks: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
+  activity: "M22 12h-4l-3 9L9 3l-3 9H2",
+  layers: "M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
+  error: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 8v4M12 16h.01",
+  warning:
+    "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",
+  clock: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2",
+  folder: "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z",
+  play: "M5 3l14 9-14 9V3z",
+  shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4",
+  code: "M16 18l6-6-6-6M8 6l-6 6 6 6",
+  info: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16v-4M12 8h.01",
+};
+
+function Icon({ name, size = 18 }: { name: string; size?: number }) {
+  return (
+    <svg
+      className="icon"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={ICON_PATHS[name]} />
+    </svg>
+  );
+}
+
+// Small "i" button placed next to a card title. Hover or focus shows the help text.
+function Hint({ text }: { text: string }) {
+  return (
+    <button type="button" className="hint" data-tip={text} aria-label={text}>
+      <Icon name="info" size={15} />
+    </button>
+  );
+}
+
+// One shared tooltip for the whole app. Any element with a data-tip attribute
+// shows its text on hover or keyboard focus. It is positioned with "fixed" so it
+// is never clipped by scrolling lists or cards.
+type TipState = { text: string; x: number; y: number; below: boolean };
+
+function TooltipLayer() {
+  const [tip, setTip] = useState<TipState | null>(null);
+
+  useEffect(() => {
+    const HALF_WIDTH = 130;
+    const MARGIN = 8;
+
+    function showFor(target: EventTarget | null) {
+      const el =
+        target instanceof Element ? (target.closest("[data-tip]") as HTMLElement | null) : null;
+      const text = el?.dataset.tip;
+      if (!el || !text) {
+        setTip(null);
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const x = Math.min(
+        Math.max(rect.left + rect.width / 2, HALF_WIDTH + MARGIN),
+        window.innerWidth - HALF_WIDTH - MARGIN,
+      );
+      const below = rect.top < 100;
+      const y = below ? rect.bottom + MARGIN : rect.top - MARGIN;
+      setTip((prev) =>
+        prev && prev.text === text && prev.x === x && prev.y === y
+          ? prev
+          : { text, x, y, below },
+      );
+    }
+
+    const onOver = (e: MouseEvent) => showFor(e.target);
+    const onFocus = (e: FocusEvent) => showFor(e.target);
+    const hide = () => setTip(null);
+
+    document.addEventListener("mouseover", onOver);
+    document.addEventListener("focusin", onFocus);
+    document.addEventListener("focusout", hide);
+    document.documentElement.addEventListener("mouseleave", hide);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("blur", hide);
+
+    return () => {
+      document.removeEventListener("mouseover", onOver);
+      document.removeEventListener("focusin", onFocus);
+      document.removeEventListener("focusout", hide);
+      document.documentElement.removeEventListener("mouseleave", hide);
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("blur", hide);
+    };
+  }, []);
+
+  if (!tip) return null;
+
+  return (
+    <div
+      role="tooltip"
+      className={tip.below ? "tooltip tooltip-below" : "tooltip tooltip-above"}
+      style={{ left: tip.x, top: tip.y }}
+    >
+      {tip.text}
+    </div>
+  );
+}
+
 // Subscribes to a Tauri event. The "cancelled" flag prevents a duplicate
 // listener when React StrictMode mounts, unmounts and re-mounts in development.
 function useTauriEvent<T>(eventName: string, handler: (payload: T) => void) {
@@ -173,7 +315,7 @@ function App() {
     const setupListener = async () => {
       unlistenFn = await onAction(async (_event) => {
         const appWindow = getCurrentWindow();
-        
+
         // These commands are asynchronous in Tauri v2 and must be awaited
         await appWindow.unminimize();
         await appWindow.show();
@@ -242,194 +384,419 @@ function App() {
   const showCounts =
     status.kind === "healthy" || status.kind === "warnings" || status.kind === "errors";
 
+  // Display-only helpers
+  const problemCount = currentResult ? currentResult.diagnostics.length : 0;
+
   return (
-    <main className="app">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark">BG</div>
+    <div className="shell">
+      <TooltipLayer />
+
+      {/* ---------- Sidebar ---------- */}
+      <aside className="sidebar">
+        <div
+          className="brand"
+          data-tip="AI BuildGuard watches your project and reports TypeScript and ESLint problems every time you save a file."
+        >
+          <div className="brand-mark">
+            <Icon name="shield" size={20} />
+          </div>
           <div>
-            <h1>AI BuildGuard</h1>
-            <p className="subtitle">Build error monitor</p>
+            <h1>BuildGuard</h1>
+            <p className="subtitle">AI build monitor</p>
           </div>
         </div>
-        <span className={PILL_CLASS[status.kind]}>
-          <span className="pill-dot" />
-          {status.label}
-        </span>
-      </header>
 
-      <section className="card">
-        <div className="card-head">
-          <h2>Monitored project</h2>
+        <nav className="nav">
+          <a
+            href="#overview"
+            className="nav-link"
+            data-tip="Go to the top: selected project, buttons and summary numbers."
+          >
+            <Icon name="grid" />
+            <span>Overview</span>
+          </a>
+          <a
+            href="#problems"
+            className="nav-link"
+            data-tip="Go to the list of errors and warnings found in your code."
+          >
+            <Icon name="list" />
+            <span>Problems</span>
+            {problemCount > 0 && <span className="nav-count">{problemCount}</span>}
+          </a>
+          <a
+            href="#checkers"
+            className="nav-link"
+            data-tip="Go to the tools (TypeScript, ESLint) that scan your project, with their raw output."
+          >
+            <Icon name="checks" />
+            <span>Checkers</span>
+          </a>
+          <a
+            href="#activity"
+            className="nav-link"
+            data-tip="Go to the log of files that changed in your project."
+          >
+            <Icon name="activity" />
+            <span>Activity</span>
+            {totalBatches > 0 && <span className="nav-count nav-count-muted">{totalBatches}</span>}
+          </a>
+        </nav>
+
+        <div
+          className="sidebar-foot"
+          data-tip="Overall health of the monitored project right now."
+        >
+          <span className="foot-label">Status</span>
+          <span className={PILL_CLASS[status.kind]} data-tip={STATUS_TIPS[status.kind]}>
+            <span className="pill-dot" />
+            {status.label}
+          </span>
+        </div>
+      </aside>
+
+      {/* ---------- Main ---------- */}
+      <main className="main">
+        <header className="page-head" id="overview">
+          <div>
+            <h2 className="page-title">Overview</h2>
+            <p className="page-sub">Live type and lint status for your project.</p>
+          </div>
           <div className="actions">
             {hasProject && (
-              <button type="button" className="btn" onClick={runCheck}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={runCheck}
+                data-tip="Run TypeScript and ESLint on the project right now, without waiting for a file change."
+              >
+                <Icon name="play" size={14} />
                 Run check
               </button>
             )}
-            <button type="button" className="btn" onClick={chooseProject}>
+            <button
+              type="button"
+              className="btn"
+              onClick={chooseProject}
+              data-tip={
+                hasProject
+                  ? "Pick a different project folder to monitor. Activity history is cleared."
+                  : "Pick the project folder you want BuildGuard to monitor."
+              }
+            >
+              <Icon name="folder" size={15} />
               {hasProject ? "Change project" : "Select project folder"}
             </button>
           </div>
-        </div>
-        <p className={hasProject ? "path" : "path path-empty"}>
-          {settings.projectPath ?? "No project selected yet."}
-        </p>
-        {error && <p className="error">{error}</p>}
-      </section>
+        </header>
 
-      <section className="stats">
-        <div className="stat">
-          <span className="stat-label">Revision</span>
-          <span className="stat-value">{status.revision > 0 ? status.revision : "—"}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Change batches</span>
-          <span className="stat-value">{totalBatches}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Errors</span>
-          <span className="stat-value">{showCounts ? status.errorCount : "—"}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Warnings</span>
-          <span className="stat-value">{showCounts ? status.warningCount : "—"}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Last check</span>
-          <span className="stat-value stat-small">
-            {currentResult ? formatSeconds(currentResult.durationMs) : "—"}
-          </span>
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="card-head">
-          <h2>Problems</h2>
-          {isChecking && <span className="muted">Updating…</span>}
-        </div>
-
-        {!currentResult && (
-          <p className="empty">
-            {hasProject ? "No check has finished yet." : "Select a project to start."}
+        {error && (
+          <p className="error" data-tip="Something went wrong. This is the error message returned by the app.">
+            {error}
           </p>
         )}
 
-        {status.kind === "healthy" && (
-          <p className="success-note">No errors or warnings found.</p>
-        )}
-
-        {status.kind === "unavailable" && (
-          <div className="notice">
-            <strong>A checker could not run.</strong>
-            <p>The project cannot be reported as healthy until it can. See the checkers below.</p>
-          </div>
-        )}
-
-        {currentResult && currentResult.diagnostics.length > 0 && (
-          <ul className={isChecking ? "problems dimmed" : "problems"}>
-            {currentResult.diagnostics.map((d, index) => (
-              <li
-                key={`${d.source}:${d.file}:${d.line}:${d.column}:${d.code}:${index}`}
-                className={d.severity === "error" ? "problem" : "problem problem-warning"}
-              >
-                <div className="problem-head">
-                  <span className="badge badge-source">{checkerLabel(d.source)}</span>
-                  <span
-                    className={d.severity === "error" ? "badge badge-error" : "badge badge-warning"}
-                  >
-                    {d.code}
-                  </span>
-                  <span className="problem-loc">
-                    {d.file}
-                    {d.line > 0 ? `:${d.line}:${d.column}` : ""}
-                  </span>
-                </div>
-                <p className="problem-msg">{d.message}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {currentResult && (
-        <section className="card">
-          <div className="card-head">
-            <h2>Checkers</h2>
-            <span className="muted">Revision {currentResult.revision}</span>
-          </div>
-          <ul className="reports">
-            {currentResult.reports.map((report) => (
-              <li key={report.name} className="report">
-                <div className="report-head">
-                  <span className="report-name">{checkerLabel(report.name)}</span>
-                  <span className={`outcome outcome-${report.outcome}`}>
-                    {OUTCOME_TEXT[report.outcome]}
-                  </span>
-                  <span className="muted">{formatSeconds(report.durationMs)}</span>
-                </div>
-                {report.message && <p className="report-message">{report.message}</p>}
-                <details className="raw">
-                  <summary>Raw output</summary>
-                  <pre>{report.rawOutput || "(no output)"}</pre>
-                </details>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <section className="card">
-        <div className="card-head">
-          <h2>Activity</h2>
-          <span className="muted">Latest {MAX_LOG_ENTRIES} batches</span>
-        </div>
-        {changes.length === 0 ? (
-          <p className="empty">
-            {hasProject
-              ? "Waiting for file changes. Save a file in your project."
-              : "Select a project to start watching."}
-          </p>
-        ) : (
-          <ul className="log">
-            {changes.map((batch) => (
-              <li key={batch.revision} className="log-item">
-                <div className="log-meta">
-                  <span className="badge">#{batch.revision}</span>
-                  <span className="muted">{formatTime(batch.atMs)}</span>
-                </div>
-                <ul className="files">
-                  {batch.files.map((file) => (
-                    <li key={file}>{file}</li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <details className="card dev">
-        <summary>Developer tools</summary>
-        <form
-          className="row"
-          onSubmit={(e) => {
-            e.preventDefault();
-            greet();
-          }}
+        <section
+          className="card project-card"
+          data-tip="The folder BuildGuard is watching. Saving any file inside it triggers a new check."
         >
-          <input
-            id="greet-input"
-            onChange={(e) => setName(e.currentTarget.value)}
-            placeholder="Enter a name..."
-          />
-          <button type="submit" className="btn">
-            Greet
-          </button>
-        </form>
-        {greetMsg && <p className="muted">{greetMsg}</p>}
-      </details>
-    </main>
+          <div className="project-icon">
+            <Icon name="folder" size={20} />
+          </div>
+          <div className="project-body">
+            <span className="card-kicker">Monitored project</span>
+            <p className={hasProject ? "path" : "path path-empty"}>
+              {settings.projectPath ?? "No project selected yet."}
+            </p>
+          </div>
+        </section>
+
+        <section className="stats">
+          <div
+            className="stat"
+            data-tip="Counter that increases each time BuildGuard detects a new batch of file changes. Shows — until the first change."
+          >
+            <div className="stat-icon stat-icon-blue">
+              <Icon name="layers" />
+            </div>
+            <div className="stat-text">
+              <span className="stat-label">Revision</span>
+              <span className="stat-value">{status.revision > 0 ? status.revision : "—"}</span>
+            </div>
+          </div>
+          <div
+            className="stat"
+            data-tip="How many groups of file saves were detected since this project was selected. One save of one or more files = one batch."
+          >
+            <div className="stat-icon stat-icon-violet">
+              <Icon name="activity" />
+            </div>
+            <div className="stat-text">
+              <span className="stat-label">Change batches</span>
+              <span className="stat-value">{totalBatches}</span>
+            </div>
+          </div>
+          <div
+            className="stat"
+            data-tip="Number of errors in the last finished check. Errors break the build, so fix these first."
+          >
+            <div className="stat-icon stat-icon-red">
+              <Icon name="error" />
+            </div>
+            <div className="stat-text">
+              <span className="stat-label">Errors</span>
+              <span className="stat-value">{showCounts ? status.errorCount : "—"}</span>
+            </div>
+          </div>
+          <div
+            className="stat"
+            data-tip="Number of warnings in the last finished check. Warnings do not break the build but are worth reviewing."
+          >
+            <div className="stat-icon stat-icon-amber">
+              <Icon name="warning" />
+            </div>
+            <div className="stat-text">
+              <span className="stat-label">Warnings</span>
+              <span className="stat-value">{showCounts ? status.warningCount : "—"}</span>
+            </div>
+          </div>
+          <div
+            className="stat"
+            data-tip="How long the most recent full check (TypeScript and ESLint together) took to finish."
+          >
+            <div className="stat-icon stat-icon-green">
+              <Icon name="clock" />
+            </div>
+            <div className="stat-text">
+              <span className="stat-label">Last check</span>
+              <span className="stat-value stat-small">
+                {currentResult ? formatSeconds(currentResult.durationMs) : "—"}
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <section className="card" id="problems">
+          <div className="card-head">
+            <div className="title-wrap">
+              <h3>Problems</h3>
+              <Hint text="Every error and warning found in your code. Each row shows the tool that found it, the error code, and the file, line and column to fix." />
+            </div>
+            {isChecking ? (
+              <span className="muted updating" data-tip="A new check is running. The list below will refresh when it finishes.">
+                <span className="spinner" /> Updating…
+              </span>
+            ) : (
+              currentResult && (
+                <span className="muted" data-tip="Total number of problems in the latest check.">
+                  {problemCount} found
+                </span>
+              )
+            )}
+          </div>
+
+          {!currentResult && (
+            <p className="empty">
+              {hasProject ? "No check has finished yet." : "Select a project to start."}
+            </p>
+          )}
+
+          {status.kind === "healthy" && (
+            <p
+              className="success-note"
+              data-tip="Great news: both checkers ran successfully and reported nothing to fix."
+            >
+              <Icon name="shield" size={16} /> No errors or warnings found.
+            </p>
+          )}
+
+          {status.kind === "unavailable" && (
+            <div
+              className="notice"
+              data-tip="At least one checker failed to start, so the results may be incomplete."
+            >
+              <strong>A checker could not run.</strong>
+              <p>The project cannot be reported as healthy until it can. See the checkers below.</p>
+            </div>
+          )}
+
+          {currentResult && currentResult.diagnostics.length > 0 && (
+            <ul className={isChecking ? "problems dimmed" : "problems"}>
+              {currentResult.diagnostics.map((d, index) => (
+                <li
+                  key={`${d.source}:${d.file}:${d.line}:${d.column}:${d.code}:${index}`}
+                  className={d.severity === "error" ? "problem" : "problem problem-warning"}
+                >
+                  <div className="problem-head">
+                    <span
+                      className="badge badge-source"
+                      data-tip={`Reported by ${checkerLabel(d.source)}.`}
+                    >
+                      {checkerLabel(d.source)}
+                    </span>
+                    <span
+                      className={
+                        d.severity === "error" ? "badge badge-error" : "badge badge-warning"
+                      }
+                      data-tip={
+                        d.severity === "error"
+                          ? `Error code ${d.code}. Severity: error, this must be fixed.`
+                          : `Rule ${d.code}. Severity: warning, worth reviewing.`
+                      }
+                    >
+                      {d.code}
+                    </span>
+                    <span
+                      className="problem-loc"
+                      data-tip={
+                        d.line > 0
+                          ? `File ${d.file}, line ${d.line}, column ${d.column}. Open it in your editor to fix.`
+                          : `File ${d.file}. No specific line was reported.`
+                      }
+                    >
+                      {d.file}
+                      {d.line > 0 ? `:${d.line}:${d.column}` : ""}
+                    </span>
+                  </div>
+                  <p className="problem-msg">{d.message}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {currentResult && (
+          <section className="card" id="checkers">
+            <div className="card-head">
+              <div className="title-wrap">
+                <h3>Checkers</h3>
+                <Hint text="The tools that scan your project. Each one reports its own result, run time and raw output." />
+              </div>
+              <span
+                className="muted"
+                data-tip="The change revision these results belong to."
+              >
+                Revision {currentResult.revision}
+              </span>
+            </div>
+            <ul className="reports">
+              {currentResult.reports.map((report) => (
+                <li key={report.name} className="report">
+                  <div className="report-head">
+                    <span
+                      className="report-icon"
+                      data-tip={CHECKER_TIPS[report.name] ?? `${checkerLabel(report.name)} checker.`}
+                    >
+                      <Icon name="code" size={15} />
+                    </span>
+                    <span
+                      className="report-name"
+                      data-tip={CHECKER_TIPS[report.name] ?? `${checkerLabel(report.name)} checker.`}
+                    >
+                      {checkerLabel(report.name)}
+                    </span>
+                    <span
+                      className={`outcome outcome-${report.outcome}`}
+                      data-tip={OUTCOME_TIPS[report.outcome]}
+                    >
+                      {OUTCOME_TEXT[report.outcome]}
+                    </span>
+                    <span
+                      className="muted report-time"
+                      data-tip="How long this checker took to run."
+                    >
+                      {formatSeconds(report.durationMs)}
+                    </span>
+                  </div>
+                  {report.message && <p className="report-message">{report.message}</p>}
+                  <details className="raw">
+                    <summary data-tip="Show the exact text the tool printed. Useful for debugging or sharing with a teammate.">
+                      Raw output
+                    </summary>
+                    <pre>{report.rawOutput || "(no output)"}</pre>
+                  </details>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <section className="card" id="activity">
+          <div className="card-head">
+            <div className="title-wrap">
+              <h3>Activity</h3>
+              <Hint text="A live log of files that changed in your project. Each entry triggers a new check." />
+            </div>
+            <span
+              className="muted"
+              data-tip="Only the most recent batches are kept to keep the app fast."
+            >
+              Latest {MAX_LOG_ENTRIES} batches
+            </span>
+          </div>
+          {changes.length === 0 ? (
+            <p className="empty">
+              {hasProject
+                ? "Waiting for file changes. Save a file in your project."
+                : "Select a project to start watching."}
+            </p>
+          ) : (
+            <ul className="log">
+              {changes.map((batch) => (
+                <li key={batch.revision} className="log-item">
+                  <div className="log-meta">
+                    <span
+                      className="badge"
+                      data-tip={`Change batch number ${batch.revision}. Higher numbers are newer.`}
+                    >
+                      #{batch.revision}
+                    </span>
+                    <span className="muted" data-tip="Time when these file changes were detected.">
+                      {formatTime(batch.atMs)}
+                    </span>
+                  </div>
+                  <ul className="files">
+                    {batch.files.map((file) => (
+                      <li key={file} data-tip="A file that was saved or changed in this batch.">
+                        {file}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <details className="card dev">
+          <summary data-tip="Extra tools for developers. You can ignore this section.">
+            Developer tools
+          </summary>
+          <form
+            className="row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              greet();
+            }}
+          >
+            <input
+              id="greet-input"
+              onChange={(e) => setName(e.currentTarget.value)}
+              placeholder="Enter a name..."
+              data-tip="Type any name to test that the app can talk to its Rust backend."
+            />
+            <button
+              type="submit"
+              className="btn"
+              data-tip="Sends the name to the backend and shows its reply."
+            >
+              Greet
+            </button>
+          </form>
+          {greetMsg && <p className="muted">{greetMsg}</p>}
+        </details>
+      </main>
+    </div>
   );
 }
 
